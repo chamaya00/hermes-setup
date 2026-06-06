@@ -69,9 +69,19 @@ jobs:
         run: |
           ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "hermes config check || true"'
 
-      - name: Restart (or install) the gateway service
+      - name: Migrate config and fix command symlink
         run: |
-          ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "hermes gateway restart || hermes gateway install"'
+          ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "hermes doctor --fix || true"'
+
+      - name: Install (or restart) the gateway as a boot-time system service
+        run: |
+          # --system installs a root systemd service that survives both SSH
+          # logout and reboot. A plain user service (hermes gateway install)
+          # gets torn down when this SSH session ends because lingering is not
+          # enabled, which is why a later session saw "Gateway is not running".
+          # install --system is idempotent; fall back to restart if it is
+          # already installed.
+          ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "sudo hermes gateway install --system || sudo hermes gateway restart"'
 
       - name: Sanity check
         run: |
