@@ -85,13 +85,19 @@ jobs:
           #      prompt. Over this non-interactive SSH session there is no TTY,
           #      so an unanswered prompt gets EOF and the install aborts without
           #      ever starting the gateway.
-          #   2. `enable-linger root` is a belt-and-suspenders for the user-service
+          #   2. `--run-as-user root` is required because newer Hermes refuses to
+          #      install a --system service while running as root unless the target
+          #      service user is named explicitly (it raised
+          #      "Refusing to install the gateway system service as root; pass
+          #      --run-as-user root to override"). Only needed at install time —
+          #      restart/status read the identity back from the unit file.
+          #   3. `enable-linger root` is a belt-and-suspenders for the user-service
           #      path: a plain user service is torn down on SSH logout unless
           #      lingering is enabled (that produced the earlier
           #      "Cannot restart gateway as a service — linger is not enabled").
           #      A true --system root service does not need it, but enabling it
           #      is harmless and covers the fallback.
-          #   3. The step ENDS on `hermes gateway status` with no `|| true`, so a
+          #   4. The step ENDS on `hermes gateway status` with no `|| true`, so a
           #      gateway that did not come up makes the deploy fail loudly instead
           #      of going green with a dead gateway (the previous
           #      `install || restart` swallowed the failure because `restart`
@@ -99,7 +105,7 @@ jobs:
           ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "
             set -e
             sudo loginctl enable-linger root || true
-            yes | sudo hermes gateway install --system
+            yes | sudo hermes gateway install --system --run-as-user root
             sudo hermes gateway restart || true
             hermes gateway status
           "'
