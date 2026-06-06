@@ -19,13 +19,37 @@ jobs:
           echo "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "${{ secrets.DROPLET_IP }}" >> ~/.ssh/known_hosts
+          # Keepalives so long, output-silent remote commands (e.g. the npm
+          # install of browser tools) don't get their idle SSH channel dropped
+          # by an intermediate NAT/firewall — that surfaced as
+          # "client_loop: send disconnect: Broken pipe" (exit 255).
+          cat > ~/.ssh/config <<'EOF'
+          Host *
+            ServerAliveInterval 30
+            ServerAliveCountMax 120
+            TCPKeepAlive yes
+          EOF
+          chmod 600 ~/.ssh/config
 
-      - name: Install Hermes + messaging deps (idempotent)
+      - name: Install or update Hermes (idempotent)
         run: |
           ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "
-            command -v hermes >/dev/null 2>&1 || \
+            # Fresh box: bootstrap with the installer, which also installs the
+            # curated [all] deps into its own venv (/usr/local/lib/hermes-agent/venv).
+            # Existing box: self-update via the documented hermes update command,
+            # falling back to re-running the installer (it git-pulls) if that fails.
+            #
+            # We deliberately do NOT pip install the messaging extra here:
+            #   * the hermes command is a wrapper that clears PYTHONPATH and runs
+            #     its own venv, so a system pip install lands in the wrong place;
+            #   * system pip on Ubuntu root is PEP 668 externally-managed and errors;
+            #   * Discord/Telegram/Slack backends lazy-install into the venv on
+            #     first gateway use, so they need no eager install step.
+            if command -v hermes >/dev/null 2>&1; then
+              hermes update || curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+            else
               curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
-            pip install \"hermes-agent[messaging]\" --quiet
+            fi
           "'
 
       - name: Push config.yaml
