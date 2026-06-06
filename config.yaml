@@ -1,0 +1,32 @@
+# ~/.hermes/config.yaml — committed to the repo. NON-SECRET behavior only.
+#
+# Secrets are NOT here. They are injected into ~/.hermes/.env at deploy time
+# by the GitHub Actions workflow:
+#   OPENROUTER_API_KEY, DISCORD_BOT_TOKEN, DISCORD_ALLOWED_USERS,
+#   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
+#
+# After your first deploy, run `hermes config show` on the Droplet once to
+# confirm these key names match your installed Hermes version, since the
+# schema can drift between releases.
+
+model:
+  provider: openrouter
+  model: anthropic/claude-sonnet-4.6   # change to any OpenRouter model id
+
+terminal:
+  backend: modal                       # serverless sandbox; hibernates when idle
+
+agent:
+  max_turns: 90
+
+display:
+  tool_progress: "new"                 # off | new | all | verbose
+
+gateway:
+  platforms:
+    discord:
+      home_chat_id: ""                 # optional: channel ID for proactive/cron delivery
+      gateway_restart_notification: false
+      require_mention: true            # only respond to @mention in channels; DMs always work
+      free_response_channels: ""       # comma-separated channel IDs that reply without mention
+      auto_thread: true                # auto-create a thread on @mention in a channel
