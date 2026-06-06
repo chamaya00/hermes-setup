@@ -3,6 +3,8 @@ name: Deploy Hermes
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     paths:
       - 'config.yaml'
       - '.github/workflows/deploy.yml'
