@@ -113,10 +113,21 @@ jobs:
           #
           # We run from the Hermes node install dir (INSTALL_DIR for root on
           # Linux = /usr/local/lib/hermes-agent, per the installer's
-          # resolve_install_layout). `npx playwright` and `require("playwright")`
-          # both resolve the project-local playwright from there, matching how
-          # the gateway invokes it, and the cache populates root's
-          # ~/.cache/ms-playwright — the same cache the (root) gateway reads.
+          # resolve_install_layout). The browser tool is a Node project there
+          # (package.json + node_modules) and the gateway loads playwright via
+          # `require("playwright")` resolved from that dir. Crucially, the
+          # installer's `npm install` is ALSO best-effort — it runs
+          # `npm install --silent 2>/dev/null || log_warn "..."`, so its failure
+          # is swallowed exactly like the browser install. A box can therefore be
+          # left with package.json present but node_modules (and the project-local
+          # playwright) missing; then `require("playwright")` throws
+          # MODULE_NOT_FOUND and a bare `npx playwright install` only fetches a
+          # throwaway copy that never populates node_modules — which is precisely
+          # the failure this deploy hit. So we run `npm install` FIRST (loud, no
+          # `|| true`) to materialize the same project-local playwright the
+          # gateway resolves, and only then `npx playwright`, whose cache
+          # populates root's ~/.cache/ms-playwright — the same cache the (root)
+          # gateway reads.
           #
           # The node smoke test then launches headless Chromium with the SAME
           # flags the gateway uses and navigates a page. There is no `|| true`:
@@ -130,6 +141,7 @@ jobs:
           ssh root@${{ secrets.DROPLET_IP }} 'bash -ls' <<'REMOTE'
           set -euo pipefail
           cd /usr/local/lib/hermes-agent
+          npm install
           npx playwright install --with-deps chromium
           node -e 'const { chromium } = require("playwright"); chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] }).then(async (b) => { const p = await b.newPage(); await p.goto("https://example.com", { timeout: 30000 }); console.log("browser smoke OK:", await p.title()); await b.close(); }).catch((e) => { console.error("browser smoke FAILED:", e && e.message ? e.message : e); process.exit(1); });'
           REMOTE
