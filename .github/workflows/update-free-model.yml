@@ -1,0 +1,62 @@
+name: Update free model
+
+# Keeps config.yaml pointed at a free OpenRouter model that is actually live and
+# supports tool calling. Free endpoints rotate away without notice (that's what
+# causes "HTTP 404: No endpoints found"), so we reselect daily and on demand.
+#
+# NOTE: scheduled runs only fire from the repository's DEFAULT branch, so this
+# workflow must be merged to main before the cron takes effect. workflow_dispatch
+# can be run from any branch (handy for testing the picker on a feature branch).
+
+on:
+  schedule:
+    - cron: '17 6 * * *'   # daily at 06:17 UTC
+  workflow_dispatch:        # on-demand: run manually (or via API) when a 404 hits
+
+permissions:
+  contents: write           # commit the updated config.yaml
+  actions: write            # dispatch deploy.yml after a change
+
+concurrency:
+  group: update-free-model
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Pick a live free model
+        env:
+          # Public endpoint, but the key is sent if present (harmless).
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_KEY }}
+        run: python scripts/pick_free_model.py
+
+      - name: Commit if the slug changed
+        id: commit
+        run: |
+          if git diff --quiet -- config.yaml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "config.yaml unchanged; nothing to do."
+          else
+            git config user.name  "hermes-model-bot"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add config.yaml
+            git commit -m "chore: auto-select live free model ($(date -u +%Y-%m-%d))"
+            git push origin "HEAD:${{ github.ref_name }}"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger deploy
+        # A push made with GITHUB_TOKEN does NOT auto-trigger deploy.yml, so we
+        # dispatch it explicitly. Only meaningful on main, where Hermes deploys.
+        if: steps.commit.outputs.changed == 'true' && github.ref_name == 'main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run deploy.yml --ref main
