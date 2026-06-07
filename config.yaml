@@ -11,7 +11,7 @@
 
 model:
   provider: openrouter
-  model: anthropic/claude-sonnet-4.6   # change to any OpenRouter model id
+  model: deepseek/deepseek-chat-v3-0324:free   # free OpenRouter model w/ tool calling; change to any OpenRouter model id
 
 terminal:
   backend: modal                       # serverless sandbox; hibernates when idle
