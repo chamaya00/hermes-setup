@@ -141,6 +141,19 @@ jobs:
           ssh root@${{ secrets.DROPLET_IP }} 'bash -ls' <<'REMOTE'
           set -euo pipefail
           cd /usr/local/lib/hermes-agent
+          # The installer's own `npm install --silent 2>/dev/null || log_warn`
+          # is best-effort, so it can be interrupted mid-write (slow box, dropped
+          # SSH channel) and leave node_modules half-applied: npm replaces a
+          # package by renaming the live dir to a hidden staging dir
+          # (node_modules/.chalk-XXXX), and a stale leftover staging dir makes the
+          # next install's rename fail with
+          #   ENOTEMPTY: rename 'node_modules/chalk' -> 'node_modules/.chalk-XXXX'
+          # which is exactly the deploy this step hit. Retrying npm install over
+          # the wreckage just re-trips the same rename, so we wipe node_modules
+          # first for a deterministic from-scratch install — this is the install
+          # whose project-local playwright the gateway resolves, so it must be
+          # clean, not patched-over.
+          rm -rf node_modules
           npm install
           npx playwright install --with-deps chromium
           node -e 'const { chromium } = require("playwright"); chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] }).then(async (b) => { const p = await b.newPage(); await p.goto("https://example.com", { timeout: 30000 }); console.log("browser smoke OK:", await p.title()); await b.close(); }).catch((e) => { console.error("browser smoke FAILED:", e && e.message ? e.message : e); process.exit(1); });'
