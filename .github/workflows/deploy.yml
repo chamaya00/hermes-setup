@@ -141,6 +141,28 @@ jobs:
           ssh root@${{ secrets.DROPLET_IP }} 'bash -ls' <<'REMOTE'
           set -euo pipefail
           cd /usr/local/lib/hermes-agent
+          # Guarantee swap before the from-scratch npm install below. That
+          # install builds the FULL hermes-agent dependency tree — which pulls
+          # in a React web UI (note the `@icons-pack/react-simple-icons`
+          # EBADENGINE warning in the logs) — and npm's dependency resolution
+          # heap is memory-hungry. On this small droplet with little/no swap it
+          # tipped the box over and the OOM killer SIGKILLed npm:
+          #   bash: line 16: 61558 Killed   npm install
+          #   ##[error]Process completed with exit code 137.   (137 = 128 + 9)
+          # The `rm -rf node_modules` (added to dodge ENOTEMPTY corruption)
+          # forces a heavy from-scratch resolve every deploy, so this is not a
+          # transient fluke — it will recur on any box without headroom.
+          # Provisioning a swapfile is the standard remedy for npm "Killed"
+          # OOMs on 1 GB droplets; it is idempotent (a no-op once /swapfile is
+          # already active) and we also pin it in /etc/fstab so a reboot keeps
+          # the headroom.
+          if ! swapon --show=NAME --noheadings | grep -qx /swapfile; then
+            fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+          fi
+          grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
           # The installer's own `npm install --silent 2>/dev/null || log_warn`
           # is best-effort, so it can be interrupted mid-write (slow box, dropped
           # SSH channel) and leave node_modules half-applied: npm replaces a
@@ -154,7 +176,9 @@ jobs:
           # whose project-local playwright the gateway resolves, so it must be
           # clean, not patched-over.
           rm -rf node_modules
-          npm install
+          # --no-audit/--no-fund skip the post-resolve audit + funding passes,
+          # trimming work and memory on the OOM-prone box above.
+          npm install --no-audit --no-fund
           npx playwright install --with-deps chromium
           node -e 'const { chromium } = require("playwright"); chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] }).then(async (b) => { const p = await b.newPage(); await p.goto("https://example.com", { timeout: 30000 }); console.log("browser smoke OK:", await p.title()); await b.close(); }).catch((e) => { console.error("browser smoke FAILED:", e && e.message ? e.message : e); process.exit(1); });'
           REMOTE
