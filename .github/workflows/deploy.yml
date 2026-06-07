@@ -67,6 +67,34 @@ jobs:
             hermes config set MODAL_TOKEN_SECRET     ${{ secrets.MODAL_TOKEN_SECRET }}
           "'
 
+      - name: Pin Chromium --no-sandbox so the browser tool works as root
+        run: |
+          # The gateway runs as root (see the gateway install step's
+          # --run-as-user root). Chromium refuses to launch as root unless
+          # started with --no-sandbox, so the native browser tool hangs and
+          # every browser_navigate times out after ~60s on ANY url — the page
+          # is irrelevant because the browser never starts
+          # (NousResearch/hermes-agent#15765). Newer Hermes auto-injects
+          # --no-sandbox,--disable-dev-shm-usage when it detects root, but we
+          # pin it explicitly via AGENT_BROWSER_ARGS so the fix does not depend
+          # on the installed Hermes version's auto-detection (the README already
+          # warns the schema/behavior drifts between releases).
+          #
+          # AGENT_BROWSER_ARGS is a non-secret env var, so it lives in
+          # ~/.hermes/.env. We write the line directly (idempotently) rather
+          # than via `hermes config set`, whose arg parser would choke on a
+          # value that begins with --. The gateway restart later in this deploy
+          # picks up the new env.
+          ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "
+            set -e
+            mkdir -p ~/.hermes
+            touch ~/.hermes/.env
+            grep -v ^AGENT_BROWSER_ARGS= ~/.hermes/.env > ~/.hermes/.env.next || true
+            echo AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage >> ~/.hermes/.env.next
+            mv ~/.hermes/.env.next ~/.hermes/.env
+            chmod 600 ~/.hermes/.env
+          "'
+
       - name: Reconcile config after any Hermes update
         run: |
           ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "hermes config check || true"'
