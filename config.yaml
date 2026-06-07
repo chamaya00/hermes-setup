@@ -16,6 +16,12 @@ model:
 terminal:
   backend: modal                       # serverless sandbox; hibernates when idle
 
+# Browser tool note (not a config.yaml key): the gateway runs as root, and
+# Chromium will not launch as root without --no-sandbox — otherwise every
+# browser_navigate hangs ~60s and times out on ANY url. The launch flags are
+# pinned via the AGENT_BROWSER_ARGS env var in ~/.hermes/.env, written by the
+# "Pin Chromium --no-sandbox" step in .github/workflows/deploy.yml.
+
 agent:
   max_turns: 90
 
