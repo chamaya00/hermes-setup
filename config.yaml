@@ -11,7 +11,7 @@
 
 model:
   provider: openrouter
-  model: deepseek/deepseek-chat-v3-0324:floor   # :floor = lowest-priced available endpoint (free when one exists, else cheapest paid). Self-healing vs :free which 404s when the free endpoint is removed.
+  model: openai/gpt-oss-20b:free   # auto-selected by update-free-model workflow (2026-06-07); live free model w/ tool calling. Do not hand-edit.
 
 terminal:
   backend: modal                       # serverless sandbox; hibernates when idle
