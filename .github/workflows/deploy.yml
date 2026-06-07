@@ -21,8 +21,8 @@ jobs:
           echo "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "${{ secrets.DROPLET_IP }}" >> ~/.ssh/known_hosts
-          # Keepalives so long, output-silent remote commands (e.g. the npm
-          # install of browser tools) don't get their idle SSH channel dropped
+          # Keepalives so long, output-silent remote commands (e.g. the Hermes
+          # installer / `hermes update`) don't get their idle SSH channel dropped
           # by an intermediate NAT/firewall — that surfaced as
           # "client_loop: send disconnect: Broken pipe" (exit 255).
           cat > ~/.ssh/config <<'EOF'
@@ -47,10 +47,19 @@ jobs:
             #   * system pip on Ubuntu root is PEP 668 externally-managed and errors;
             #   * Discord/Telegram/Slack backends lazy-install into the venv on
             #     first gateway use, so they need no eager install step.
+            #
+            # --skip-browser: we drive the web via Hermes's lightweight
+            # web_search/web_extract tools (hosted Firecrawl), NOT the local
+            # Playwright/Chromium browser tool. Skipping the browser install
+            # avoids the installer's best-effort `npx playwright install` (a 600s
+            # download) and the headless-Chromium-on-a-tiny-droplet failure modes
+            # (root/--no-sandbox hangs, OOM-killed npm) that previously broke this
+            # deploy. Re-enable browser automation only if the agent must click
+            # through / fill forms on pages, not merely read or search them.
             if command -v hermes >/dev/null 2>&1; then
-              hermes update || curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+              hermes update || curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-browser
             else
-              curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+              curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-browser
             fi
           "'
 
@@ -67,97 +76,28 @@ jobs:
             hermes config set MODAL_TOKEN_SECRET     ${{ secrets.MODAL_TOKEN_SECRET }}
           "'
 
-      - name: Pin Chromium --no-sandbox so the browser tool works as root
+      - name: Enable web_search/web_extract (Firecrawl key, if configured)
         run: |
-          # The gateway runs as root (see the gateway install step's
-          # --run-as-user root). Chromium refuses to launch as root unless
-          # started with --no-sandbox, so the native browser tool hangs and
-          # every browser_navigate times out after ~60s on ANY url — the page
-          # is irrelevant because the browser never starts
-          # (NousResearch/hermes-agent#15765). Newer Hermes auto-injects
-          # --no-sandbox,--disable-dev-shm-usage when it detects root, but we
-          # pin it explicitly via AGENT_BROWSER_ARGS so the fix does not depend
-          # on the installed Hermes version's auto-detection (the README already
-          # warns the schema/behavior drifts between releases).
+          # Hermes reaches the web through TWO independent paths, and we use the
+          # lightweight one. web_search/web_extract hit hosted Firecrawl
+          # server-side — no local browser — and Hermes auto-detects the backend
+          # the moment FIRECRAWL_API_KEY is present in ~/.hermes/.env (no
+          # config.yaml edit needed). This replaces the old local Playwright/
+          # Chromium "browser tool" path, which on this root/tiny-droplet box was
+          # a standing source of deploy failures (--no-sandbox launch hangs,
+          # OOM-killed npm). Firecrawl's free tier (500 credits/mo) keeps this in
+          # line with the repo's ~$0/day posture; SearXNG is the no-account
+          # self-host alternative (see README).
           #
-          # AGENT_BROWSER_ARGS is a non-secret env var, so it lives in
-          # ~/.hermes/.env. We write the line directly (idempotently) rather
-          # than via `hermes config set`, whose arg parser would choke on a
-          # value that begins with --. The gateway restart later in this deploy
-          # picks up the new env.
-          ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "
-            set -e
-            mkdir -p ~/.hermes
-            touch ~/.hermes/.env
-            grep -v ^AGENT_BROWSER_ARGS= ~/.hermes/.env > ~/.hermes/.env.next || true
-            echo AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage >> ~/.hermes/.env.next
-            mv ~/.hermes/.env.next ~/.hermes/.env
-            chmod 600 ~/.hermes/.env
-          "'
-
-      - name: Ensure Playwright Chromium is installed and launches (browser tool)
-        run: |
-          # Pinning --no-sandbox (previous step) is necessary but NOT sufficient:
-          # it only matters if there is a browser to launch. The Hermes installer
-          # *does* run `npx playwright install --with-deps chromium`, but that
-          # step is best-effort — it runs under a 600s timeout and its failure is
-          # swallowed (`... || log_warn "browser tools will not work"`), so the
-          # installer still exits 0 with NO Chromium binary on disk. A fresh box
-          # whose browser install timed out (slow apt, npx download) therefore
-          # deploys green with a gateway that comes up fine, yet every
-          # browser_navigate hangs the full ~60s and times out on ANY url because
-          # Chromium never starts — the same symptom as the root/--no-sandbox bug,
-          # a different root cause. So we install Chromium explicitly here. It is
-          # idempotent: playwright is a near-instant no-op once the matching
-          # revision is already present.
-          #
-          # We run from the Hermes node install dir (INSTALL_DIR for root on
-          # Linux = /usr/local/lib/hermes-agent, per the installer's
-          # resolve_install_layout). The browser tool is a Node project there
-          # (package.json + node_modules) and the gateway loads playwright via
-          # `require("playwright")` resolved from that dir. Crucially, the
-          # installer's `npm install` is ALSO best-effort — it runs
-          # `npm install --silent 2>/dev/null || log_warn "..."`, so its failure
-          # is swallowed exactly like the browser install. A box can therefore be
-          # left with package.json present but node_modules (and the project-local
-          # playwright) missing; then `require("playwright")` throws
-          # MODULE_NOT_FOUND and a bare `npx playwright install` only fetches a
-          # throwaway copy that never populates node_modules — which is precisely
-          # the failure this deploy hit. So we run `npm install` FIRST (loud, no
-          # `|| true`) to materialize the same project-local playwright the
-          # gateway resolves, and only then `npx playwright`, whose cache
-          # populates root's ~/.cache/ms-playwright — the same cache the (root)
-          # gateway reads.
-          #
-          # The node smoke test then launches headless Chromium with the SAME
-          # flags the gateway uses and navigates a page. There is no `|| true`:
-          # this catches all three failure modes — missing binary, the
-          # root/--no-sandbox launch hang, and blocked outbound network (the
-          # alternate theory) — and fails the deploy loudly instead of going
-          # green with a browser tool that times out in production. The heredoc
-          # is piped to `bash -ls` on stdin (a login shell, so node is on PATH)
-          # with a quoted 'REMOTE' delimiter, so the node -e script needs no
-          # quote-escaping gymnastics.
-          ssh root@${{ secrets.DROPLET_IP }} 'bash -ls' <<'REMOTE'
-          set -euo pipefail
-          cd /usr/local/lib/hermes-agent
-          # The installer's own `npm install --silent 2>/dev/null || log_warn`
-          # is best-effort, so it can be interrupted mid-write (slow box, dropped
-          # SSH channel) and leave node_modules half-applied: npm replaces a
-          # package by renaming the live dir to a hidden staging dir
-          # (node_modules/.chalk-XXXX), and a stale leftover staging dir makes the
-          # next install's rename fail with
-          #   ENOTEMPTY: rename 'node_modules/chalk' -> 'node_modules/.chalk-XXXX'
-          # which is exactly the deploy this step hit. Retrying npm install over
-          # the wreckage just re-trips the same rename, so we wipe node_modules
-          # first for a deterministic from-scratch install — this is the install
-          # whose project-local playwright the gateway resolves, so it must be
-          # clean, not patched-over.
-          rm -rf node_modules
-          npm install
-          npx playwright install --with-deps chromium
-          node -e 'const { chromium } = require("playwright"); chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] }).then(async (b) => { const p = await b.newPage(); await p.goto("https://example.com", { timeout: 30000 }); console.log("browser smoke OK:", await p.title()); await b.close(); }).catch((e) => { console.error("browser smoke FAILED:", e && e.message ? e.message : e); process.exit(1); });'
-          REMOTE
+          # The key is OPTIONAL: if the FIRECRAWL_KEY secret is unset we skip the
+          # step with a loud notice rather than writing an empty key (which would
+          # half-configure the backend). Add it under repo Settings > Secrets to
+          # turn web access on.
+          if [ -n "${{ secrets.FIRECRAWL_KEY }}" ]; then
+            ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "hermes config set FIRECRAWL_API_KEY ${{ secrets.FIRECRAWL_KEY }}"'
+          else
+            echo "::warning::FIRECRAWL_KEY secret not set — web_search/web_extract stay OFF. Add it in repo Settings > Secrets and re-run to enable web access."
+          fi
 
       - name: Reconcile config after any Hermes update
         run: |
