@@ -35,27 +35,35 @@ jobs:
 
       - name: Install or update Hermes (idempotent)
         run: |
+          # NOTE: keep the remote command (inside 'bash -lc "..."') free of
+          # comments. Apostrophes (e.g. "Hermes's") would close the outer single
+          # quotes early and backticks would trigger command substitution, which
+          # previously broke this step with:
+          #   bash: -c: line 1: unexpected EOF while looking for matching `"'
+          # All explanatory prose therefore lives here, at the runner level,
+          # where apostrophes and backticks are harmless.
+          #
+          # Fresh box: bootstrap with the installer, which also installs the
+          # curated [all] deps into its own venv (/usr/local/lib/hermes-agent/venv).
+          # Existing box: self-update via the documented "hermes update" command,
+          # falling back to re-running the installer (it git-pulls) if that fails.
+          #
+          # We deliberately do NOT pip install the messaging extra here:
+          #   * the hermes command is a wrapper that clears PYTHONPATH and runs
+          #     its own venv, so a system pip install lands in the wrong place;
+          #   * system pip on Ubuntu root is PEP 668 externally-managed and errors;
+          #   * Discord/Telegram/Slack backends lazy-install into the venv on
+          #     first gateway use, so they need no eager install step.
+          #
+          # --skip-browser: we drive the web via Hermes's lightweight
+          # web_search/web_extract tools (hosted Firecrawl), NOT the local
+          # Playwright/Chromium browser tool. Skipping the browser install
+          # avoids the installer's best-effort "npx playwright install" (a 600s
+          # download) and the headless-Chromium-on-a-tiny-droplet failure modes
+          # (root/--no-sandbox hangs, OOM-killed npm) that previously broke this
+          # deploy. Re-enable browser automation only if the agent must click
+          # through / fill forms on pages, not merely read or search them.
           ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "
-            # Fresh box: bootstrap with the installer, which also installs the
-            # curated [all] deps into its own venv (/usr/local/lib/hermes-agent/venv).
-            # Existing box: self-update via the documented hermes update command,
-            # falling back to re-running the installer (it git-pulls) if that fails.
-            #
-            # We deliberately do NOT pip install the messaging extra here:
-            #   * the hermes command is a wrapper that clears PYTHONPATH and runs
-            #     its own venv, so a system pip install lands in the wrong place;
-            #   * system pip on Ubuntu root is PEP 668 externally-managed and errors;
-            #   * Discord/Telegram/Slack backends lazy-install into the venv on
-            #     first gateway use, so they need no eager install step.
-            #
-            # --skip-browser: we drive the web via Hermes's lightweight
-            # web_search/web_extract tools (hosted Firecrawl), NOT the local
-            # Playwright/Chromium browser tool. Skipping the browser install
-            # avoids the installer's best-effort `npx playwright install` (a 600s
-            # download) and the headless-Chromium-on-a-tiny-droplet failure modes
-            # (root/--no-sandbox hangs, OOM-killed npm) that previously broke this
-            # deploy. Re-enable browser automation only if the agent must click
-            # through / fill forms on pages, not merely read or search them.
             if command -v hermes >/dev/null 2>&1; then
               hermes update || curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-browser
             else
