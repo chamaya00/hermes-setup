@@ -69,6 +69,7 @@ Actions secret. The per-key limits above only cap damage until you do.
 - `config.yaml` — non-secret Hermes behavior, shipped to the Droplet on deploy.
 - `scripts/pick_free_model.py` — selects a live free, tool-capable OpenRouter model.
 - `scripts/check_costs.sh` — read-only cost snapshot across providers.
-- `.github/workflows/deploy.yml` — install/update Hermes, push config, start gateway.
+- `.github/workflows/deploy.yml` — install/update Hermes, push config, ensure the
+  Playwright Chromium binary is installed (and smoke-tests it), start gateway.
 - `.github/workflows/update-free-model.yml` — daily + on-demand free-model refresh.
 - `docs/plans/` — design docs / handoff plans.

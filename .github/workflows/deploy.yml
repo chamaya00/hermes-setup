@@ -95,6 +95,45 @@ jobs:
             chmod 600 ~/.hermes/.env
           "'
 
+      - name: Ensure Playwright Chromium is installed and launches (browser tool)
+        run: |
+          # Pinning --no-sandbox (previous step) is necessary but NOT sufficient:
+          # it only matters if there is a browser to launch. The Hermes installer
+          # *does* run `npx playwright install --with-deps chromium`, but that
+          # step is best-effort — it runs under a 600s timeout and its failure is
+          # swallowed (`... || log_warn "browser tools will not work"`), so the
+          # installer still exits 0 with NO Chromium binary on disk. A fresh box
+          # whose browser install timed out (slow apt, npx download) therefore
+          # deploys green with a gateway that comes up fine, yet every
+          # browser_navigate hangs the full ~60s and times out on ANY url because
+          # Chromium never starts — the same symptom as the root/--no-sandbox bug,
+          # a different root cause. So we install Chromium explicitly here. It is
+          # idempotent: playwright is a near-instant no-op once the matching
+          # revision is already present.
+          #
+          # We run from the Hermes node install dir (INSTALL_DIR for root on
+          # Linux = /usr/local/lib/hermes-agent, per the installer's
+          # resolve_install_layout). `npx playwright` and `require("playwright")`
+          # both resolve the project-local playwright from there, matching how
+          # the gateway invokes it, and the cache populates root's
+          # ~/.cache/ms-playwright — the same cache the (root) gateway reads.
+          #
+          # The node smoke test then launches headless Chromium with the SAME
+          # flags the gateway uses and navigates a page. There is no `|| true`:
+          # this catches all three failure modes — missing binary, the
+          # root/--no-sandbox launch hang, and blocked outbound network (the
+          # alternate theory) — and fails the deploy loudly instead of going
+          # green with a browser tool that times out in production. The heredoc
+          # is piped to `bash -ls` on stdin (a login shell, so node is on PATH)
+          # with a quoted 'REMOTE' delimiter, so the node -e script needs no
+          # quote-escaping gymnastics.
+          ssh root@${{ secrets.DROPLET_IP }} 'bash -ls' <<'REMOTE'
+          set -euo pipefail
+          cd /usr/local/lib/hermes-agent
+          npx playwright install --with-deps chromium
+          node -e 'const { chromium } = require("playwright"); chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] }).then(async (b) => { const p = await b.newPage(); await p.goto("https://example.com", { timeout: 30000 }); console.log("browser smoke OK:", await p.title()); await b.close(); }).catch((e) => { console.error("browser smoke FAILED:", e && e.message ? e.message : e); process.exit(1); });'
+          REMOTE
+
       - name: Reconcile config after any Hermes update
         run: |
           ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "hermes config check || true"'
