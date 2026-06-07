@@ -16,16 +16,20 @@ model:
 terminal:
   backend: modal                       # serverless sandbox; hibernates when idle
 
-# Browser tool note (not a config.yaml key): the local browser tool drives
-# Chromium via Playwright (Node). Two independent things must both hold or every
-# browser_navigate hangs ~60s and times out on ANY url:
-#   1. The Chromium *binary* must actually be installed. The Hermes installer's
-#      `npx playwright install --with-deps chromium` is best-effort (600s timeout,
-#      failure swallowed), so deploy.yml installs + smoke-tests it explicitly in
-#      the "Ensure Playwright Chromium is installed and launches" step.
-#   2. The gateway runs as root, and Chromium will not launch as root without
-#      --no-sandbox. The launch flags are pinned via the AGENT_BROWSER_ARGS env
-#      var in ~/.hermes/.env, written by the "Pin Chromium --no-sandbox" step.
+# Web access note (not a config.yaml key): this agent reads/searches the web via
+# Hermes's lightweight web_search/web_extract tools, which run server-side through
+# hosted Firecrawl — NO local browser. Hermes auto-detects the backend once
+# FIRECRAWL_API_KEY is present in ~/.hermes/.env, so deploy.yml injects that key
+# (from the FIRECRAWL_KEY GitHub secret) instead of installing Chromium. The
+# installer is run with --skip-browser.
+#
+# We deliberately do NOT use the local Playwright/Chromium "browser tool": on this
+# root/tiny-droplet box it was a standing source of deploy failures (root needs
+# --no-sandbox or launches hang; the from-scratch `npm install` OOM-killed the
+# box). The browser tool is only worth re-introducing if the agent must *interact*
+# with pages (click, fill forms, scrape JS-only SPAs) — not merely read or search
+# them. The docs are explicit: prefer web_search/web_extract; they are faster and
+# cheaper.
 
 agent:
   max_turns: 90
