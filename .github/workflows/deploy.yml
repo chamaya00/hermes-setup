@@ -75,16 +75,61 @@ jobs:
         run: scp config.yaml root@${{ secrets.DROPLET_IP }}:~/.hermes/config.yaml
 
       - name: Inject secrets (config set auto-routes env-var names to .env)
+        env:
+          DROPLET_IP: ${{ secrets.DROPLET_IP }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_KEY }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          DISCORD_ALLOWED_USERS: ${{ secrets.DISCORD_USER_ID }}
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: |
-          ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "
-            hermes config set OPENROUTER_API_KEY    ${{ secrets.OPENROUTER_KEY }}
-            hermes config set DISCORD_BOT_TOKEN      ${{ secrets.DISCORD_TOKEN }}
-            hermes config set DISCORD_ALLOWED_USERS  ${{ secrets.DISCORD_USER_ID }}
-            hermes config set MODAL_TOKEN_ID         ${{ secrets.MODAL_TOKEN_ID }}
-            hermes config set MODAL_TOKEN_SECRET     ${{ secrets.MODAL_TOKEN_SECRET }}
-          "'
+          # Secret VALUES are never interpolated into this shell string, never
+          # embedded in a shell-string literal, and never passed as an argument to
+          # ANY process (local OR remote) — so they cannot surface in the runner's
+          # or the Droplet's `ps aux`. They live only in the step's env: block above
+          # (GitHub masks them in logs). We assemble a script on stdin and pipe it to
+          # the remote shell in two parts:
+          #   * Part 1 (unquoted heredoc) is expanded by the RUNNER: `printf %q`
+          #     shell-quotes each value into `export` lines (immune to spaces, $, ",
+          #     ', backticks). printf is a bash builtin, so even on the runner the
+          #     value is never a process argument. These lines carry the value into
+          #     the remote bash's ENVIRONMENT over the encrypted SSH stdin channel.
+          #   * Part 2 (quoted heredoc) runs VERBATIM on the remote: it upserts each
+          #     KEY=value line into ~/.hermes/.env using only shell builtins
+          #     (printf + redirection), reading the value through `${!key}` indirect
+          #     expansion. `hermes config set` is intentionally NOT used here because
+          #     it would take the value as a positional ARGUMENT (exposing it in the
+          #     Droplet's process list); for these env-var-style names config set's
+          #     only effect is to write this very file, so we write it directly. The
+          #     later `hermes config check` / `hermes doctor --fix` steps reconcile
+          #     exactly as before.
+          {
+            cat <<ENV_EOF
+          export OPENROUTER_API_KEY=$(printf %q "$OPENROUTER_API_KEY")
+          export DISCORD_BOT_TOKEN=$(printf %q "$DISCORD_BOT_TOKEN")
+          export DISCORD_ALLOWED_USERS=$(printf %q "$DISCORD_ALLOWED_USERS")
+          export MODAL_TOKEN_ID=$(printf %q "$MODAL_TOKEN_ID")
+          export MODAL_TOKEN_SECRET=$(printf %q "$MODAL_TOKEN_SECRET")
+          ENV_EOF
+            cat <<'SCRIPT_EOF'
+          set -eu
+          umask 077
+          env_file="$HOME/.hermes/.env"
+          mkdir -p "$HOME/.hermes"
+          touch "$env_file"
+          for key in OPENROUTER_API_KEY DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS MODAL_TOKEN_ID MODAL_TOKEN_SECRET; do
+            grep -v "^${key}=" "$env_file" > "${env_file}.tmp" || true
+            mv "${env_file}.tmp" "$env_file"
+            printf '%s=%s\n' "$key" "${!key}" >> "$env_file"
+          done
+          chmod 600 "$env_file"
+          SCRIPT_EOF
+          } | ssh root@"$DROPLET_IP" bash -ls
 
       - name: Enable web_search/web_extract (Firecrawl key, if configured)
+        env:
+          DROPLET_IP: ${{ secrets.DROPLET_IP }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_KEY }}
         run: |
           # Hermes reaches the web through TWO independent paths, and we use the
           # lightweight one. web_search/web_extract hit hosted Firecrawl
@@ -101,8 +146,29 @@ jobs:
           # step with a loud notice rather than writing an empty key (which would
           # half-configure the backend). Add it under repo Settings > Secrets to
           # turn web access on.
-          if [ -n "${{ secrets.FIRECRAWL_KEY }}" ]; then
-            ssh root@${{ secrets.DROPLET_IP }} 'bash -lc "hermes config set FIRECRAWL_API_KEY ${{ secrets.FIRECRAWL_KEY }}"'
+          #
+          # The key VALUE is never interpolated into a shell string and never passed
+          # as an argument to any process: it lives only in the env: block above and
+          # is upserted into ~/.hermes/.env over the SSH stdin channel exactly like
+          # the other secrets (printf %q-quoted export carried into the remote env,
+          # then written with shell builtins — no `hermes config set` argument).
+          if [ -n "$FIRECRAWL_API_KEY" ]; then
+            {
+              cat <<ENV_EOF
+          export FIRECRAWL_API_KEY=$(printf %q "$FIRECRAWL_API_KEY")
+          ENV_EOF
+              cat <<'SCRIPT_EOF'
+          set -eu
+          umask 077
+          env_file="$HOME/.hermes/.env"
+          mkdir -p "$HOME/.hermes"
+          touch "$env_file"
+          grep -v "^FIRECRAWL_API_KEY=" "$env_file" > "${env_file}.tmp" || true
+          mv "${env_file}.tmp" "$env_file"
+          printf '%s=%s\n' "FIRECRAWL_API_KEY" "$FIRECRAWL_API_KEY" >> "$env_file"
+          chmod 600 "$env_file"
+          SCRIPT_EOF
+            } | ssh root@"$DROPLET_IP" bash -ls
           else
             echo "::warning::FIRECRAWL_KEY secret not set — web_search/web_extract stay OFF. Add it in repo Settings > Secrets and re-run to enable web access."
           fi
