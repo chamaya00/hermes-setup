@@ -11,7 +11,7 @@
 
 model:
   provider: openrouter
-  model: openai/gpt-oss-20b:free   # auto-selected by update-free-model workflow (2026-07-22); live free model w/ tool calling. Do not hand-edit.
+  model: openai/gpt-oss-20b:free   # auto-selected by update-free-model workflow (2026-07-23); live free model w/ tool calling. Do not hand-edit.
 
 terminal:
   backend: modal                       # serverless sandbox; hibernates when idle
