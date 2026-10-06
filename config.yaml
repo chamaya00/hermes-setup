@@ -11,7 +11,7 @@
 
 model:
   provider: openrouter
-  model: apodex/apodex-1.1-mini:free   # auto-selected by update-free-model workflow (2026-10-05); live free model w/ tool calling. Do not hand-edit.
+  model: apodex/apodex-1.1-mini:free   # auto-selected by update-free-model workflow (2026-10-06); live free model w/ tool calling. Do not hand-edit.
 
 terminal:
   backend: modal                       # serverless sandbox; hibernates when idle
